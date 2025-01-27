@@ -1,0 +1,81 @@
+{\rtf1\ansi\ansicpg1252\cocoartf2821
+\cocoatextscaling0\cocoaplatform0{\fonttbl\f0\fswiss\fcharset0 Helvetica;}
+{\colortbl;\red255\green255\blue255;}
+{\*\expandedcolortbl;;}
+\paperw11900\paperh16840\margl1440\margr1440\vieww11520\viewh8400\viewkind0
+\pard\tx720\tx1440\tx2160\tx2880\tx3600\tx4320\tx5040\tx5760\tx6480\tx7200\tx7920\tx8640\pardirnatural\partightenfactor0
+
+\f0\fs24 \cf0 import com.google.cloud.bigquery.BigQuery;\
+import com.google.cloud.bigquery.BigQueryOptions;\
+import com.google.cloud.bigquery.QueryJobConfiguration;\
+import com.google.cloud.bigquery.Job;\
+import com.google.cloud.scheduler.v1.*;\
+import com.google.protobuf.Duration;\
+import com.google.protobuf.Timestamp;\
+import java.io.IOException;\
+import java.util.concurrent.TimeUnit;\
+\
+public class BigQueryScheduledQuery \{\
+\
+    public static void main(String[] args) throws Exception \{\
+        // Your BigQuery project and query details\
+        String projectId = "ri-dev-346203";\
+        String datasetName = "usage_metrics";\
+        String tableName = "account_usage_partitioned_clustered";\
+        \
+        // The BigQuery SQL query you want to run daily\
+        String query = "INSERT INTO `" + projectId + "." + datasetName + "." + tableName + "` "\
+                + "SELECT * "\
+                + "FROM ( "\
+                + "  SELECT *, "\
+                + "         ROW_NUMBER() OVER ( "\
+                + "           PARTITION BY account_id, usage_limit_metric_name "\
+                + "           ORDER BY updated_date DESC "\
+                + "         ) AS row_num "\
+                + "  FROM `" + projectId + "." + datasetName + ".account_usage` "\
+                + "  WHERE created_date > ( "\
+                + "    SELECT MAX(created_date) "\
+                + "    FROM `" + projectId + "." + datasetName + "." + tableName + "` "\
+                + "  ) "\
+                + ") "\
+                + "WHERE row_num = 1;";\
+\
+        // Initialize BigQuery client\
+        BigQuery bigquery = BigQueryOptions.getDefaultInstance().getService();\
+\
+        // Create the query job configuration\
+        QueryJobConfiguration queryConfig = QueryJobConfiguration.newBuilder(query)\
+                .setUseLegacySql(false)\
+                .build();\
+\
+        // Set the job to run daily via Google Cloud Scheduler\
+        scheduleQueryDaily(projectId, queryConfig);\
+    \}\
+\
+    private static void scheduleQueryDaily(String projectId, QueryJobConfiguration queryConfig) throws IOException \{\
+        // Initialize Cloud Scheduler client\
+        try (CloudSchedulerClient schedulerClient = CloudSchedulerClient.create()) \{\
+\
+            // Define the schedule in cron format (daily at midnight UTC)\
+            String cronSchedule = "0 0 * * *";  // Every day at midnight UTC\
+\
+            // Create the Cloud Scheduler job\
+            Job job = Job.newBuilder()\
+                    .setName("projects/" + projectId + "/locations/us-central1/jobs/daily-query-job")\
+                    .setDescription("Daily BigQuery query job")\
+                    .setSchedule(cronSchedule)\
+                    .setTimeZone("UTC")\
+                    .setHttpTarget(HttpTarget.newBuilder()\
+                            .setUri("https://bigquery.googleapis.com/bigquery/v2/projects/" + projectId + "/queries")\
+                            .setHttpMethod(HttpMethod.POST)\
+                            .setBodyAsJson(queryConfig.toString())\
+                            .build())\
+                    .build();\
+\
+            // Create the job in Cloud Scheduler\
+            schedulerClient.createJob(job);\
+            System.out.println("Scheduled the query job successfully.");\
+        \}\
+    \}\
+\}\
+}
